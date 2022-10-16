@@ -1,0 +1,2 @@
+# Linker link to sfml
+g++ -std=c++14 ./driver.cpp -o prog -L/usr/local/Cellar/sfml/2.5.1_2 -lsfml-window -lsfml-graphics -lsfml-system
