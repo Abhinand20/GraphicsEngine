@@ -1,7 +1,10 @@
 /**
  * @file engine.cpp 
  * @author Abhinand Jha (abhinanj@andrew.cmu.edu)
- * @brief 
+ * @brief An interactive 3D engine that takes an object represented as 
+ *        points and triangles and projects them onto a 2D window
+ *        Object on the screen will rotate as per the user's mouse movement
+ * 
  * @version 0.1
  * @date 2022-10-16
  * 
@@ -20,38 +23,45 @@
 engine::engine(std::string filePath)
 {
     success = meshObj.readVertices(filePath);
-    allPoints.resize(meshObj.numVertices);
     cameraPos = point3d{0,0,0};
 }
-
+/** @brief Translate and scale triangles, project them into 2D and render them 
+ *         - Triangles not currently visible are not rendered
+ *         - All visible faces are shaded according to their orientation w.r.t the observer
+ *         - Orientation is calculated by casting a light ray into the direction of the observer
+ *           and taking the dot product between the ray and surface normal
+ * 
+**/
 void engine::drawOnWindow(sf::RenderWindow *window)
 {
-    int currentTriangle = 0;
-    bool toRender;
     std::vector<triangle> trianglesToRender;
+    mat4x4 transMat, worldMat;
+
     center = { 0.5f * (float)window->getSize().x, 0.5f * (float)window->getSize().y, 0.0f};
+    transMat = getTranslationMat(0.0f, 0.0f, 3.0f);
+    worldMat = getIdentityMat();
+    worldMat = matMul(rotateMatY, rotateMatX);
+    worldMat = matMul(worldMat, transMat);
+
     for(auto tri : meshObj.tris)
     {
-        triangle triProjected, triTranslated, triRotatedX, triRotatedXY, ray, normalRotatedX, normalRotatedXY, normalProjected;
+        triangle triProjected, triTransformed;
         point3d normal;
         
-        // Only render triangles that are facing the camera
+        // Transform each triangle
         for(int i = 0; i < 3; ++i)
         {   
-            // Translate the triangle
-            matVecMult(tri.pt[i], rotateMatX, triRotatedX.pt[i]);
-            matVecMult(triRotatedX.pt[i], rotateMatY, triRotatedXY.pt[i]);
-
-            triTranslated.pt[i] = triRotatedXY.pt[i];
-            triTranslated.pt[i].z = triRotatedXY.pt[i].z + 3.0f;
+            matVecMult(tri.pt[i], worldMat, triTransformed.pt[i]);
         }
 
-        // Calculate the normal of the triangle
-        normal = getNormal(triTranslated);
+        // Only render triangles that are facing the camera
+        normal = getNormal(triTransformed);
 
-        // Get ray from triangle to camera
-        point3d cameraRay = triTranslated.pt[0] - cameraPos;
+        // Ray from camera to triangle
+        point3d cameraRay = triTransformed.pt[0] - cameraPos;
 
+        // If the dot product of the normal and camera ray is negative
+        // the triangle is facing the camera
         if(vecDotProduct(normal, cameraRay) > 0.0f)
         {
             continue;
@@ -63,12 +73,12 @@ void engine::drawOnWindow(sf::RenderWindow *window)
 
             // Illumination
             point3d lightDirection = {0.0f, 0.0f, 1.0f};
-            float normlize = sqrt(lightDirection.x * lightDirection.x + lightDirection.y * lightDirection.y + lightDirection.z * lightDirection.z);
+            float normlize = eucledianDistance(point3d{0.0f,0.0f,0.0f}, lightDirection);
             lightDirection /= normlize;
 
             float dp = std::max(0.1f, vecDotProduct(normal, lightDirection));
 
-            matVecMult(triTranslated.pt[i], projMat, triProjected.pt[i]);
+            matVecMult(triTransformed.pt[i], projMat, triProjected.pt[i]);
 
             // Scale into view
             triProjected.pt[i].x += 1.0f;
@@ -82,8 +92,6 @@ void engine::drawOnWindow(sf::RenderWindow *window)
         trianglesToRender.push_back(triProjected);
 
         // Painter's algorithm
-        // Get the midpoint of the triangles and sort them
-        // Draw the triangles from back to front
         sort(trianglesToRender.begin(), trianglesToRender.end(), [](triangle &a, triangle &b) {
             float z1 = (a.pt[0].z + a.pt[1].z + a.pt[2].z) / 3.0f;
             float z2 = (b.pt[0].z + b.pt[1].z + b.pt[2].z) / 3.0f;
@@ -99,10 +107,31 @@ void engine::drawOnWindow(sf::RenderWindow *window)
 
 }
 
+void engine::drawVertex(sf::RenderWindow *window, point3d &pt, float &illumination)
+{
+    sf::CircleShape circle(5.0f);
+    circle.setFillColor(sf::Color(0,0,std::max(95.0f, illumination * 255.0f)));
+    circle.setPosition(pt.x, pt.y);
+    circle.setOrigin(5.0f, 5.0f);
+    window->draw(circle);
+}
+
+void engine::drawTri(sf::RenderWindow *window, triangle &tris)
+{
+    sf::VertexArray triangleStrip(sf::TrianglesStrip, 3);
+
+    for(int i = 0; i < 3; ++i)
+    {
+        triangleStrip[i].position = sf::Vector2f(tris.pt[i].x, tris.pt[i].y);
+        
+        triangleStrip[i].color = sf::Color(0, 0, std::max(95.0f,255.0f * tris.illumination));
+    }
+    window->draw(triangleStrip);
+}
+
 void engine::getProjMat(float fovDegrees, float aspectRatio, float fNear, float fFar)
 {
     float fovRad;
-    // Populate the matrix
     fovRad = 1.0f / tanf( fovDegrees * 0.5f / 180.0f * PI);
     projMat.m[0][0] = aspectRatio * fovRad;
     projMat.m[1][1] = fovRad;
@@ -119,15 +148,25 @@ float engine::vecDotProduct(point3d &v1, point3d &v2)
 
 float engine::getDistanceToPoint(point3d pt)
 {
-    return eucledianDistance(center, pt);
+    unsigned int minDist = INT_MAX, dist;
+    size_t minIdx;
+    for(size_t i = 0; i < meshObj.numVertices; ++i)
+    {
+        dist = eucledianDistance(meshObj.allVertices[i], pt);
+        if(dist < minDist)
+        {
+            minDist = dist;
+            minIdx = i;
+        }
+    }
+
+    return eucledianDistance(meshObj.allVertices[minIdx], pt);
 }
 
 void engine::rotate(float phiX, float phiY, float phiZ)
 {
     getRotatationMat(phiX, phiY);
 }
-
-
 
 void engine::matVecMult(point3d &in, mat4x4 &mat, point3d &out)
 {
@@ -171,8 +210,8 @@ point3d engine::vecCrossProduct(point3d &v1, point3d &v2)
 void engine::getRotatationMat(float phiX, float phiY, float phiZ)
 {
     getRotateMatX(phiX);
-    getRotateMatZ(phiZ);
     getRotateMatY(phiY);
+    getRotateMatZ(phiZ);
 }
 
 void engine::getRotateMatX(float theta)
@@ -205,45 +244,45 @@ void engine::getRotateMatY(float theta)
     rotateMatY.m[3][3] = 1.0f;
 }
 
-void engine::drawVertex(sf::RenderWindow *window, point3d &pt, float &illumination)
+mat4x4 engine::getIdentityMat()
 {
-    sf::CircleShape circle(5.0f);
-    circle.setFillColor(sf::Color(0,0,std::max(95.0f, illumination * 255.0f)));
-    circle.setPosition(pt.x, pt.y);
-    circle.setOrigin(5.0f, 5.0f);
-    window->draw(circle);
+    mat4x4 mat;
+    mat.m[0][0] = 1.0f;
+    mat.m[1][1] = 1.0f;
+    mat.m[2][2] = 1.0f;
+    mat.m[3][3] = 1.0f;
+    return mat;
 }
 
-void engine::drawTri(sf::RenderWindow *window, triangle &tris)
+mat4x4 engine::getTranslationMat(float x, float y, float z)
 {
-    sf::VertexArray triangleStrip(sf::TrianglesStrip, 3);
+    mat4x4 mat;
+    mat.m[0][0] = 1.0f;
+    mat.m[1][1] = 1.0f;
+    mat.m[2][2] = 1.0f;
+    mat.m[3][3] = 1.0f;
+    mat.m[3][0] = x;
+    mat.m[3][1] = y;
+    mat.m[3][2] = z;
+    return mat;
+}
 
-    for(int i = 0; i < 3; ++i)
+mat4x4 engine::matMul(mat4x4 &mat1, mat4x4 &mat2)
+{  
+    mat4x4 out;
+    for (int i = 0; i < 4; i++)
     {
-        triangleStrip[i].position = sf::Vector2f(tris.pt[i].x, tris.pt[i].y);
-        
-        triangleStrip[i].color = sf::Color(0, 0, std::max(95.0f,255.0f * tris.illumination));
+        for (int j = 0; j < 4; j++)
+        {
+            float sum = 0;
+            for (int k = 0; k < 4; k++)
+            {
+                sum += mat1.m[i][k] * mat2.m[k][j];
+            }
+            out.m[i][j] = sum;
+        }
     }
-    window->draw(triangleStrip);
-
-    sf::Vertex line[2];
-    // Draw lines between the three points
-    // for (int i = 0; i < 2; ++i)
-    // {
-    //     for (int j = i+1; j < 3; ++j)
-    //     {
-    //         line[0].position = sf::Vector2f(tris.pt[i].x, tris.pt[i].y);
-    //         line[0].color  = sf::Color::Red;
-    //         line[1].position = sf::Vector2f(tris.pt[j].x, tris.pt[j].y);
-    //         line[1].color  = sf::Color::Red;
-
-    //         drawVertex(window, tris.pt[j], tris.illumination);
-    //         drawVertex(window, tris.pt[i], tris.illumination);
-    //         // window->draw(line, 2, sf::Lines);
-            
-    //     }
-    // }
-
+    return out;
 }
 
 float engine::eucledianDistance(point3d p1, point3d p2)

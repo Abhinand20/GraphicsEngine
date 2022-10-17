@@ -1,9 +1,10 @@
 /**
  * @file window.hpp
  * @author Abhinand Jha (abhinanj@andrew.cmu.edu)
- * @brief 
+ * @brief  Interface between the object and the user, handles user input and
+ * 		   passes it to the engine for rendering
  * @version 0.1
- * @date 2022-10-16
+ * @date 2022-10-15
  * 
  * 
  */
