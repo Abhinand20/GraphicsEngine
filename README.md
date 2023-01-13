@@ -4,7 +4,7 @@
 Using 2D graphics only, create a window which will display a 3D object defined by vertices and the edges of the faces of the object. Object can be controlled through the movement of the mouse.
 ### Part-2
 
-Implement shading of the object based on its relative orientatio.
+Implement shading of the object based on its relative orientation.
 
 ## Solution
 * The directory `part1` contains all the source code and executable for the first challenge and the directory `part2` has the same for the second challenge
